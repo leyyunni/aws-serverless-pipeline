@@ -1,0 +1,134 @@
+name: Deploy AWS Serverless Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: 1.7.0
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ── 1. Test Lambda locally ────────────────────────────────────────────────
+  test:
+    name: Test Lambda Function
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: pip install boto3
+
+      - name: Run local tests
+        run: python lambda/handler.py
+
+  # ── 2. Package Lambda zip ─────────────────────────────────────────────────
+  package:
+    name: Package Lambda
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Zip Lambda handler
+        run: |
+          cd lambda
+          zip -r handler.zip handler.py
+
+      - name: Upload Lambda artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-package
+          path: lambda/handler.zip
+
+  # ── 3. Terraform plan (PRs) ───────────────────────────────────────────────
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    needs: package
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Lambda artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-package
+          path: lambda/
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: terraform
+
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: terraform
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+        working-directory: terraform
+
+  # ── 4. Terraform apply (main only) ────────────────────────────────────────
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: package
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Lambda artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-package
+          path: lambda/
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: terraform
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
+        working-directory: terraform
