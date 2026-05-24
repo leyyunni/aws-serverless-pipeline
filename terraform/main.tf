@@ -155,6 +155,28 @@ resource "aws_s3_bucket_notification" "trigger" {
   depends_on = [aws_lambda_permission.s3_invoke]
 }
 
+# ── EventBridge Weekly Trigger ────────────────────────────────────────────────
+
+resource "aws_cloudwatch_event_rule" "weekly" {
+  name                = "${local.prefix}-weekly-trigger"
+  description         = "Triggers Lambda every Monday at 8AM UTC"
+  schedule_expression = "cron(0 8 ? * MON *)"
+}
+
+resource "aws_cloudwatch_event_target" "lambda" {
+  rule      = aws_cloudwatch_event_rule.weekly.name
+  target_id = "LambdaTarget"
+  arn       = aws_lambda_function.processor.arn
+}
+
+resource "aws_lambda_permission" "eventbridge_invoke" {
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.processor.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.weekly.arn
+}
+
 # ── Outputs ───────────────────────────────────────────────────────────────────
 
 output "bucket_name" {
